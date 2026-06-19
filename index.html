@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>読み支援ツール</title>
+<style>
+  :root{
+    --fontstack:"BIZ UDPGothic","UD デジタル教科書体 NK-R","Hiragino Maru Gothic ProN","Yu Gothic UI",sans-serif;
+    --readline:1.9;
+    --readspace:0.04em;
+    --accent:#3a6ea5;
+    --accent-soft:#dceaf7;
+    --line:#e3ddcf;
+    /* 設定ページの配色（②の配色変更で書き換わる） */
+    --page-bg:#FBF7EE;
+    --surface:#ffffff;
+    --ink:#2b2b2b;
+    --muted:#6b6b6b;
+    --label:#444444;
+    /* ①プレビュー用 */
+    --previewfont:var(--fontstack);
+    --previewweight:400;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    background:var(--page-bg);color:var(--ink);
+    font-family:"BIZ UDPGothic","Yu Gothic UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    transition:background .2s ease,color .2s ease;
+  }
+
+  /* ===== 設定ページ ===== */
+  .wrap{max-width:760px;margin:0 auto;padding:18px;}
+  h1{font-size:20px;margin:4px 0 16px;display:flex;align-items:center;gap:8px;}
+  h1 .badge{font-size:12px;background:var(--accent-soft);color:var(--accent);padding:3px 8px;border-radius:999px;font-weight:700;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px;}
+  .card h2{font-size:14px;margin:0 0 10px;color:var(--muted);}
+  textarea{
+    width:100%;min-height:160px;resize:vertical;border:1px solid var(--line);border-radius:10px;
+    padding:10px;font-size:16px;line-height:1.7;
+    font-family:var(--previewfont);font-weight:var(--previewweight);
+    background:var(--surface);color:var(--ink);
+  }
+  .hint{font-size:12px;color:var(--muted);margin:8px 0 0;line-height:1.7;}
+  .row{margin:14px 0;}
+  .row > label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:var(--label);}
+  input[type=range]{width:100%;}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 13px;font-size:14px;cursor:pointer;color:var(--label);}
+  .chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .chip:focus-visible{outline:3px solid #000;outline-offset:2px;}
+  .playbtn{
+    width:100%;border:none;border-radius:14px;padding:20px;font-size:22px;font-weight:800;
+    background:var(--accent);color:#fff;cursor:pointer;letter-spacing:.05em;
+  }
+  .playbtn:focus-visible{outline:3px solid #000;outline-offset:3px;}
+
+  /* ===== 読むページ（全画面） ===== */
+  #reader{
+    position:fixed;inset:0;display:none;flex-direction:column;
+    background:#FBF7EE;color:#2b2b2b;
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+    padding-left:env(safe-area-inset-left);
+    padding-right:env(safe-area-inset-right);
+  }
+  #reader.show{display:flex;}
+  .topbar{padding:10px 14px;}
+  .backbtn{border:1px solid currentColor;background:transparent;color:inherit;border-radius:10px;padding:8px 14px;font-size:15px;font-weight:700;cursor:pointer;opacity:.75;}
+  .backbtn:focus-visible{outline:3px solid #000;outline-offset:2px;}
+  #readerStage{
+    flex:1;display:flex;align-items:center;justify-content:center;
+    padding:2vh 12px;overflow:hidden;
+  }
+  #readerText{
+    font-family:var(--fontstack);line-height:var(--readline);letter-spacing:var(--readspace);
+    font-weight:var(--readweight,400);
+    text-align:center;width:100%;overflow-wrap:anywhere;
+  }
+  #readerText ruby rt{font-size:.5em;}
+  .readernav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 22px;}
+  .navcenter{display:flex;flex-direction:column;align-items:center;gap:6px;}
+  .navbtn{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    width:clamp(96px,24vw,160px);height:104px;border-radius:18px;border:none;
+    background:var(--accent);color:#fff;cursor:pointer;
+  }
+  .navbtn .ico{font-size:38px;line-height:1;}
+  #prev .ico, #next .ico{font-size:56px;}
+  .navbtn .lbl{font-size:15px;font-weight:700;}
+  .navbtn.ghost{background:transparent;color:inherit;border:2px solid currentColor;opacity:.85;}
+  .navbtn:disabled{opacity:.3;}
+  .navbtn:focus-visible{outline:3px solid #000;outline-offset:2px;}
+  .counter{font-size:16px;min-width:80px;text-align:center;opacity:.7;}
+</style>
+</head>
+<body>
+
+<!-- ===== 設定ページ ===== -->
+<div class="wrap" id="setup">
+  <h1>読み支援ツール <span class="badge">設定</span></h1>
+
+  <div class="card">
+    <h2>① 話す内容（原稿）</h2>
+    <textarea id="src" placeholder="ここに読ませたい原稿を貼り付けてください。"></textarea>
+    <div class="row" style="margin-top:10px;">
+      <button class="chip" id="autoRuby" style="font-weight:700;border-color:var(--accent);color:var(--accent);">かな ふりがなを自動でつける</button>
+      <span id="rubyStatus" class="hint" style="margin-left:8px;"></span>
+    </div>
+    <p class="hint">
+      ・上のボタンで、漢字に自動でふりがなが付きます（ネット接続が必要）。<br>
+      ・読みがちがうときは、原稿の中の <b>漢字《かんじ》</b> を直接書き直せます。<br>
+      ・区切り：句点（。！？）か改行ごとに、1文ずつめくれます。
+    </p>
+    <div class="row">
+      <label>区切り方</label>
+      <div class="chips" id="splitChips">
+        <button class="chip active" data-split="sentence">文ごと（。！？）</button>
+        <button class="chip" data-split="line">行ごと（改行）</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>② 読みやすさ</h2>
+    <div class="row">
+      <label>文字の大きさ</label>
+      <div class="chips" id="sizeChips">
+        <button class="chip active" data-size="auto">画面いっぱい（自動）</button>
+        <button class="chip" data-size="line">画面いっぱい（一行）</button>
+        <button class="chip" data-size="fixed">固定する</button>
+      </div>
+    </div>
+    <div class="row" id="fixedRow" style="display:none;">
+      <label>固定サイズ <span id="sizeVal">80px</span></label>
+      <input type="range" id="size" min="24" max="220" step="2" value="80">
+    </div>
+    <div class="row">
+      <label>行間</label>
+      <input type="range" id="line" min="1.3" max="3.2" step="0.1" value="1.9">
+    </div>
+    <div class="row">
+      <label>字間（文字の間隔）</label>
+      <input type="range" id="space" min="0" max="0.2" step="0.01" value="0.04">
+    </div>
+    <div class="row">
+      <label>フォント</label>
+      <div class="chips" id="fontChips">
+        <button class="chip active" data-font='"BIZ UDPGothic","UD デジタル教科書体 NK-R","Yu Gothic UI",sans-serif'>UDゴシック</button>
+        <button class="chip" data-font='"UD デジタル教科書体 NK-R","Yu Mincho","Hiragino Mincho ProN",serif'>教科書体</button>
+        <button class="chip" data-font='"Hiragino Maru Gothic ProN","Yu Gothic UI",sans-serif'>丸ゴシック</button>
+        <button class="chip" data-font='"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo",sans-serif'>ゴシック体</button>
+        <button class="chip" data-font='"Hiragino Mincho ProN","Yu Mincho","YuMincho","BIZ UDPMincho","MS Mincho",serif'>明朝体</button>
+        <button class="chip" data-font='"Yu Gothic","YuGothic","Hiragino Sans","Meiryo",sans-serif'>游ゴシック</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>太さ</label>
+      <div class="chips" id="weightChips">
+        <button class="chip active" data-weight="400">ふつう</button>
+        <button class="chip" data-weight="700">太め</button>
+        <button class="chip" data-weight="900">極太</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>配色</label>
+      <div class="chips" id="themeChips">
+        <button class="chip active" data-bg="#FBF7EE" data-ink="#2b2b2b">クリーム</button>
+        <button class="chip" data-bg="#ffffff" data-ink="#222222">白地に黒</button>
+        <button class="chip" data-bg="#1c1c1c" data-ink="#f2f2f2">黒地に白</button>
+        <button class="chip" data-bg="#dff0ff" data-ink="#10334f">うす青</button>
+        <button class="chip" data-bg="#fff7da" data-ink="#3a2f00">うす黄</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="playbtn" id="play">▶ 再生（読むページへ）</button>
+</div>
+
+<!-- ===== 読むページ（全画面） ===== -->
+<div id="reader">
+  <div class="topbar">
+    <button class="backbtn" id="back">◀ 設定にもどる</button>
+  </div>
+  <div id="readerStage">
+    <div id="readerText"></div>
+  </div>
+  <div class="readernav">
+    <button class="navbtn ghost" id="prev" aria-label="前の文へ">
+      <span class="ico">◀</span><span class="lbl">もどる</span>
+    </button>
+    <div class="navcenter">
+      <button class="navbtn" id="say" aria-label="読み上げ">
+        <span class="ico">🔊</span><span class="lbl">よむ</span>
+      </button>
+      <span class="counter" id="counter">0 / 0</span>
+    </div>
+    <button class="navbtn ghost" id="next" aria-label="次の文へ">
+      <span class="ico">▶</span><span class="lbl">すすむ</span>
+    </button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const root = document.documentElement;
+
+  let splitMode = "sentence";
+  let font = '"BIZ UDPGothic","UD デジタル教科書体 NK-R","Yu Gothic UI",sans-serif';
+  let sizeMode = "auto";
+  let weight = "400";
+  let theme = {bg:"#FBF7EE", ink:"#2b2b2b"};
+  let chunks = [];
+  let idx = 0;
+  let lineSize = null; // 一行モードで全文に使う共通サイズ
+
+  // ふりがな記法（漢字《かんじ》）→ <ruby>
+  //  ｜で底を明示／漢字の連続／その他、の順で処理して、助詞などに余計にかからないようにする
+  const KANJI = "\\u4E00-\\u9FFF\\u3005\\u3006\\u30F6";
+  function toRuby(text){
+    let s = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    s = s.replace(/｜([^｜《》\s]+)《([^《》]+)》/g,'<ruby>$1<rt>$2</rt></ruby>');
+    s = s.replace(new RegExp("(["+KANJI+"]+)《([^《》]+)》","g"),'<ruby>$1<rt>$2</rt></ruby>');
+    s = s.replace(/([^｜《》\s]+)《([^《》]+)》/g,'<ruby>$1<rt>$2</rt></ruby>');
+    return s;
+  }
+  function stripRuby(text){
+    return text
+      .replace(/｜([^｜《》\s]+)《[^《》]+》/g,'$1')
+      .replace(new RegExp("(["+KANJI+"]+)《[^《》]+》","g"),'$1')
+      .replace(/([^｜《》\s]+)《[^《》]+》/g,'$1')
+      .replace(/[｜《》]/g,'');
+  }
+
+  function buildChunks(){
+    const raw = $("src").value;
+    if(splitMode === "line"){
+      chunks = raw.split(/\n/).map(s=>s.trim()).filter(Boolean);
+    } else {
+      chunks = raw.split(/\n/)
+        .flatMap(line => line.match(/[^。！？]*[。！？]?/g) || [])
+        .map(s=>s.trim()).filter(Boolean);
+    }
+  }
+
+  // 読むページを開く
+  function openReader(){
+    buildChunks();
+    if(!chunks.length){ alert("原稿を入れてください。"); return; }
+    idx = 0;
+    const r = $("reader");
+    r.style.background = theme.bg;
+    r.style.color = theme.ink;
+    root.style.setProperty('--fontstack', font);
+    root.style.setProperty('--readline', $("line").value);
+    root.style.setProperty('--readspace', $("space").value+"em");
+    root.style.setProperty('--readweight', weight);
+    r.classList.add("show");
+    // できる端末では本物の全画面に（非対応端末では無視されます）
+    if(r.requestFullscreen){ r.requestFullscreen().catch(()=>{}); }
+    if(sizeMode === "line"){ lineSize = computeLineSize(); }
+    drawReader();
+  }
+  function closeReader(){
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    if(document.fullscreenElement && document.exitFullscreen){ document.exitFullscreen().catch(()=>{}); }
+    $("reader").classList.remove("show");
+  }
+
+  function drawReader(){
+    const el = $("readerText");
+    el.innerHTML = toRuby(chunks[idx] || "");
+    $("counter").textContent = (chunks.length ? idx+1 : 0) + " / " + chunks.length;
+    $("prev").disabled = idx <= 0;
+    $("next").disabled = idx >= chunks.length-1;
+    // 一行モードは折り返さない／その他は折り返す
+    el.style.whiteSpace = (sizeMode === "line") ? "nowrap" : "normal";
+    if(sizeMode === "auto"){ fitText(); }
+    else if(sizeMode === "line"){ el.style.fontSize = (lineSize || 24) + "px"; }
+    else { el.style.fontSize = $("size").value + "px"; }
+    applyStroke(el);
+  }
+
+  // 太さに応じて文字の輪郭を太らせる（2種類しか太さを持たないフォントでも差が出る）
+  function applyStroke(el){
+    const f = parseFloat(el.style.fontSize) || 24;
+    const factor = weight === "900" ? 0.045 : weight === "700" ? 0.018 : 0;
+    el.style.webkitTextStrokeWidth = (f * factor).toFixed(2) + "px";
+    el.style.webkitTextStrokeColor = "currentColor";
+  }
+
+  // 文字を画面の高さいっぱいまで大きくする
+  function fitText(){
+    const stage = $("readerStage");
+    const el = $("readerText");
+    const maxH = stage.clientHeight * 0.96;
+    const csF = getComputedStyle(stage);
+    const padXF = (parseFloat(csF.paddingLeft)||0) + (parseFloat(csF.paddingRight)||0);
+    const maxW = stage.clientWidth - padXF - 6; // 実際に描ける幅いっぱい
+    let lo = 24, hi = 600, best = 24;
+    while(lo <= hi){
+      const mid = (lo + hi) >> 1;
+      el.style.fontSize = mid + "px";
+      if(el.scrollHeight <= maxH && el.scrollWidth <= maxW){ best = mid; lo = mid+1; }
+      else { hi = mid-1; }
+    }
+    el.style.fontSize = best + "px";
+  }
+
+  // 一行モード用：すべての文が一行で収まる最大サイズ（＝一番長い文に合わせる）
+  function computeLineSize(){
+    const stage = $("readerStage");
+    const el = $("readerText");
+    const maxH = stage.clientHeight * 0.96;
+    const csL = getComputedStyle(stage);
+    const padXL = (parseFloat(csL.paddingLeft)||0) + (parseFloat(csL.paddingRight)||0);
+    const maxW = stage.clientWidth - padXL - 6; // 実際に描ける幅いっぱい
+    const prevWS = el.style.whiteSpace;
+    el.style.whiteSpace = "nowrap";
+    let lo = 24, hi = 600, best = 24;
+    while(lo <= hi){
+      const mid = (lo + hi) >> 1;
+      el.style.fontSize = mid + "px";
+      let ok = true;
+      for(let i=0;i<chunks.length;i++){
+        el.innerHTML = toRuby(chunks[i] || "");
+        if(el.scrollWidth > maxW || el.scrollHeight > maxH){ ok = false; break; }
+      }
+      if(ok){ best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    // 表示中の文に戻す
+    el.innerHTML = toRuby(chunks[idx] || "");
+    el.style.whiteSpace = prevWS;
+    return best;
+  }
+
+  function speak(){
+    if(!('speechSynthesis' in window)){ alert("この端末は読み上げに対応していません。"); return; }
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(stripRuby(chunks[idx] || ""));
+    u.lang = "ja-JP"; u.rate = 0.9;
+    window.speechSynthesis.speak(u);
+  }
+
+  function go(d){
+    const n = idx + d;
+    if(n >= 0 && n < chunks.length){ idx = n; drawReader(); }
+  }
+
+  // ---- 自動ふりがな（Kuroshiro / kuromoji をネットから読み込み）----
+  let kuroshiro = null;
+  function loadScript(src){
+    return new Promise((res, rej)=>{
+      const s = document.createElement("script");
+      s.src = src; s.onload = res; s.onerror = ()=>rej(new Error("読み込み失敗: "+src));
+      document.head.appendChild(s);
+    });
+  }
+  // 指定ミリ秒で返事がなければ失敗にする
+  function withTimeout(promise, ms, label){
+    return new Promise((res, rej)=>{
+      const t = setTimeout(()=>rej(new Error((label||"処理")+"が時間切れ")), ms);
+      promise.then(v=>{ clearTimeout(t); res(v); }, e=>{ clearTimeout(t); rej(e); });
+    });
+  }
+  async function initKuroshiro(onProgress){
+    if(kuroshiro) return kuroshiro;
+    const say = m => { if(onProgress) onProgress(m); };
+    say("ライブラリを読み込み中…");
+    if(!window.Kuroshiro){
+      await withTimeout(loadScript("https://cdn.jsdelivr.net/npm/kuroshiro@1.2.0/dist/kuroshiro.min.js"), 15000, "ライブラリ読み込み");
+    }
+    if(!window.KuromojiAnalyzer){
+      await withTimeout(loadScript("https://cdn.jsdelivr.net/npm/kuroshiro-analyzer-kuromoji@1.1.0/dist/kuroshiro-analyzer-kuromoji.min.js"), 15000, "ライブラリ読み込み");
+    }
+    // ブラウザ版は .default にクラスが入っていることが多いので両対応にする
+    const K = window.Kuroshiro && (window.Kuroshiro.default || window.Kuroshiro);
+    const A = window.KuromojiAnalyzer && (window.KuromojiAnalyzer.default || window.KuromojiAnalyzer);
+    if(typeof K !== "function") throw new Error("Kuroshiro本体が読み込めませんでした");
+    if(typeof A !== "function") throw new Error("kuromoji解析器が読み込めませんでした");
+    // 辞書の置き場所を複数試し、固まったら次へ（各20秒でタイムアウト）
+    const DICTS = [
+      "https://unpkg.com/kuromoji@0.1.2/dict/",
+      "https://cdn.jsdelivr.net/npm/@sglkc/kuromoji@1.0.1/dict/",
+      "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/"
+    ];
+    let lastErr = null;
+    for(let i=0;i<DICTS.length;i++){
+      try{
+        say("辞書を読み込み中…（"+(i+1)+"/"+DICTS.length+" を試行）");
+        const k = new K();
+        await withTimeout(k.init(new A({ dictPath: DICTS[i] })), 20000, "辞書読み込み");
+        kuroshiro = k;
+        return k;
+      }catch(e){ lastErr = e; }
+    }
+    throw new Error("辞書を読み込めません（" + (lastErr && lastErr.message ? lastErr.message : lastErr) + "）");
+  }
+  // Kuroshiroの <ruby> 出力を 漢字《よみ》 表記に変換
+  function rubyHtmlToKakko(html){
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    tmp.querySelectorAll("rp").forEach(e=>e.remove());
+    tmp.querySelectorAll("ruby").forEach(ruby=>{
+      const rt = ruby.querySelector("rt");
+      const reading = rt ? rt.textContent : "";
+      if(rt) rt.remove();
+      const base = ruby.textContent;
+      ruby.replaceWith(base + (reading ? "《"+reading+"》" : ""));
+    });
+    return tmp.textContent;
+  }
+  async function autoFurigana(){
+    const ta = $("src");
+    if(!ta.value.trim()){ alert("先に原稿を入れてください。"); return; }
+    if(/《/.test(ta.value) && !confirm("すでにふりがながあります。付け直しますか？（手で直した分は消えます）")) return;
+    const status = $("rubyStatus");
+    const btn = $("autoRuby");
+    btn.disabled = true; status.textContent = "準備中…";
+    try{
+      const k = await initKuroshiro(m => { status.textContent = m; });
+      status.textContent = "ふりがなを付けています…";
+      const plain = stripRuby(ta.value); // いったん素の文章に戻してから付け直す
+      const html = await k.convert(plain, { mode:"furigana", to:"hiragana" });
+      ta.value = rubyHtmlToKakko(html);
+      status.textContent = "完了しました。読みがちがう所は手で直せます。";
+    }catch(err){
+      const reason = (err && err.message) ? err.message
+                   : (typeof err === "string") ? err
+                   : (err ? String(err) : "原因不明");
+      status.textContent = "失敗：" + reason + "（ネット接続をご確認ください。手動の《》は使えます）";
+      console.error("auto-furigana error:", err);
+    }finally{
+      btn.disabled = false;
+    }
+  }
+
+  // ---- 設定ページのイベント ----
+  $("play").addEventListener("click", openReader);
+  $("autoRuby").addEventListener("click", autoFurigana);
+  $("back").addEventListener("click", closeReader);
+  $("prev").addEventListener("click", ()=>go(-1));
+  $("next").addEventListener("click", ()=>go(1));
+  $("say").addEventListener("click", speak);
+
+  $("size").addEventListener("input", ()=> $("sizeVal").textContent = $("size").value+"px");
+
+  $("splitChips").addEventListener("click", e=>{
+    const b=e.target.closest(".chip"); if(!b)return;
+    $("splitChips").querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    b.classList.add("active"); splitMode=b.dataset.split;
+  });
+  $("sizeChips").addEventListener("click", e=>{
+    const b=e.target.closest(".chip"); if(!b)return;
+    $("sizeChips").querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    b.classList.add("active"); sizeMode=b.dataset.size;
+    $("fixedRow").style.display = (sizeMode==="fixed") ? "block" : "none";
+  });
+  $("fontChips").addEventListener("click", e=>{
+    const b=e.target.closest(".chip"); if(!b)return;
+    $("fontChips").querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    b.classList.add("active"); font=b.dataset.font; applyPreview();
+  });
+  $("weightChips").addEventListener("click", e=>{
+    const b=e.target.closest(".chip"); if(!b)return;
+    $("weightChips").querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    b.classList.add("active"); weight=b.dataset.weight; applyPreview();
+  });
+  $("themeChips").addEventListener("click", e=>{
+    const b=e.target.closest(".chip"); if(!b)return;
+    $("themeChips").querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    b.classList.add("active"); theme={bg:b.dataset.bg, ink:b.dataset.ink};
+    applyPageTheme();
+  });
+
+  // ①の入力欄に選んだフォント・太さを反映
+  function applyPreview(){
+    root.style.setProperty('--previewfont', font);
+    root.style.setProperty('--previewweight', weight);
+    const ta = $("src");
+    const factor = weight === "900" ? 0.045 : weight === "700" ? 0.018 : 0;
+    ta.style.webkitTextStrokeWidth = (16 * factor).toFixed(2) + "px";
+    ta.style.webkitTextStrokeColor = "currentColor";
+  }
+  // 設定ページの配色を選んだテーマに合わせる（背景の明るさで文字色などを切替）
+  function isDark(hex){
+    const m = hex.replace('#','');
+    const r = parseInt(m.substring(0,2),16);
+    const g = parseInt(m.substring(2,4),16);
+    const b = parseInt(m.substring(4,6),16);
+    const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+    return lum < 0.5;
+  }
+  function applyPageTheme(){
+    const s = root.style;
+    s.setProperty('--page-bg', theme.bg);
+    s.setProperty('--ink', theme.ink);
+    if(isDark(theme.bg)){
+      s.setProperty('--surface', '#262626');
+      s.setProperty('--muted', '#a9a9a9');
+      s.setProperty('--label', '#d6d6d6');
+      s.setProperty('--line', '#3d3d3d');
+    } else {
+      s.setProperty('--surface', '#ffffff');
+      s.setProperty('--muted', '#6b6b6b');
+      s.setProperty('--label', '#444444');
+      s.setProperty('--line', '#e3ddcf');
+    }
+  }
+  applyPreview();
+  applyPageTheme();
+
+  // 画面の回転・サイズ変更で再フィット
+  function refit(){
+    if(!$("reader").classList.contains("show")) return;
+    if(sizeMode === "line"){ lineSize = computeLineSize(); }
+    drawReader();
+  }
+  window.addEventListener("resize", refit);
+  window.addEventListener("orientationchange", ()=>setTimeout(refit,300));
+
+  // キーボード操作（PC用）
+  document.addEventListener("keydown", e=>{
+    if(!$("reader").classList.contains("show")) return;
+    if(e.key==="ArrowRight"||e.key===" ") go(1);
+    else if(e.key==="ArrowLeft") go(-1);
+    else if(e.key==="Escape") closeReader();
+  });
+})();
+</script>
+</body>
+</html>
