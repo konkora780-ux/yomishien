@@ -249,6 +249,16 @@
       .replace(/([^｜《》\s]+)《[^《》]+》/g,'$1')
       .replace(/[｜《》]/g,'');
   }
+  // 読み上げ用：漢字ではなく、ふりがなで指定した読み方をそのまま使う
+  // （例：「今日《きょう》」を漢字のまま読み上げに渡すと、端末の読み上げ機能が
+  // 「こんにちは」と誤読することがあるため、ふりがなの読みを優先する）
+  function toReadingText(text){
+    return text
+      .replace(/｜([^｜《》\s]+)《([^《》]+)》/g,'$2')
+      .replace(new RegExp("(["+KANJI+"]+)《([^《》]+)》","g"),'$2')
+      .replace(/([^｜《》\s]+)《([^《》]+)》/g,'$2')
+      .replace(/[｜《》]/g,'');
+  }
 
   function buildChunks(){
     const raw = $("src").value;
@@ -375,7 +385,7 @@
   function speak(){
     if(!('speechSynthesis' in window)){ alert("この端末は読み上げに対応していません。"); return; }
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(stripRuby(chunks[idx] || ""));
+    const u = new SpeechSynthesisUtterance(toReadingText(chunks[idx] || ""));
     u.lang = "ja-JP"; u.rate = 0.9;
     const v = pickJaVoice();
     if(v) u.voice = v;
