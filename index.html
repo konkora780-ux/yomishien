@@ -94,6 +94,7 @@
   .navbtn:disabled{opacity:.3;}
   .navbtn:focus-visible{outline:3px solid #000;outline-offset:2px;}
   .counter{font-size:16px;min-width:80px;text-align:center;opacity:.7;}
+  .voicelabel{font-size:11px;opacity:.5;text-align:center;}
 </style>
 </head>
 <body>
@@ -196,6 +197,7 @@
         <span class="ico">🔊</span><span class="lbl">よむ</span>
       </button>
       <span class="counter" id="counter">0 / 0</span>
+      <span class="voicelabel" id="voiceLabel"></span>
     </div>
     <button class="navbtn ghost" id="next" aria-label="次の文へ">
       <span class="ico">▶</span><span class="lbl">すすむ</span>
@@ -352,11 +354,33 @@
     return best;
   }
 
+  // ---- 読み上げの声選び ----
+  // iPadの「設定→アクセシビリティ→読み上げコンテンツ」で声を追加しても、
+  // Web側にどの声が見えているかは端末依存のため、実際に使われた声を画面下に小さく表示して確認できるようにする
+  let voiceList = [];
+  function refreshVoices(){
+    if('speechSynthesis' in window){ voiceList = window.speechSynthesis.getVoices(); }
+  }
+  if('speechSynthesis' in window){
+    refreshVoices();
+    window.speechSynthesis.onvoiceschanged = refreshVoices;
+  }
+  function pickJaVoice(){
+    const ja = voiceList.filter(v => v.lang && v.lang.toLowerCase().startsWith('ja'));
+    if(!ja.length) return null;
+    const good = ja.find(v => /enhanced|premium|拡張|高品質/i.test(v.name));
+    return good || ja[0];
+  }
+
   function speak(){
     if(!('speechSynthesis' in window)){ alert("この端末は読み上げに対応していません。"); return; }
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(stripRuby(chunks[idx] || ""));
     u.lang = "ja-JP"; u.rate = 0.9;
+    const v = pickJaVoice();
+    if(v) u.voice = v;
+    const label = $("voiceLabel");
+    if(label) label.textContent = "声：" + (v ? v.name : "端末の既定");
     window.speechSynthesis.speak(u);
   }
 
