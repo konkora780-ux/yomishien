@@ -47,6 +47,10 @@
   .row{margin:14px 0;}
   .row > label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:var(--label);}
   input[type=range]{width:100%;}
+  input[type=text]{
+    width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;
+    font-size:15px;background:var(--surface);color:var(--ink);
+  }
   .chips{display:flex;flex-wrap:wrap;gap:6px;}
   .chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 13px;font-size:14px;cursor:pointer;color:var(--label);}
   .chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
@@ -177,6 +181,29 @@
     </div>
   </div>
 
+  <div class="card">
+    <h2>③ 読み上げの声</h2>
+    <div class="row">
+      <label>声の種類</label>
+      <div class="chips" id="voiceChips">
+        <button class="chip active" data-voice="ja-JP-NanamiNeural">なな美（女性・高品質）</button>
+        <button class="chip" data-voice="ja-JP-KeitaNeural">圭太（男性・高品質）</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Azure Speech APIキー（貼ると高品質な声になります・空でもOK）</label>
+      <input type="text" id="azureKey" placeholder="ここにAzureのキーを貼り付け" autocomplete="off">
+    </div>
+    <div class="row">
+      <label>リージョン</label>
+      <input type="text" id="azureRegion" placeholder="例：japaneast" value="japaneast">
+    </div>
+    <p class="hint">
+      ・キーを入れると高品質な声（なな美／圭太）で読み上げます。空のままなら、これまで通り端末標準の読み上げになります。<br>
+      ・キーとリージョンは、この端末のブラウザ内だけに保存されます（外部に送信されるのは読み上げるとき、Microsoftのサーバーへ本文とキーを送るときだけです）。
+    </p>
+  </div>
+
   <button class="playbtn" id="play">▶ 再生（読むページへ）</button>
 </div>
 
@@ -291,6 +318,7 @@
   }
   function closeReader(){
     if(window.speechSynthesis) window.speechSynthesis.cancel();
+    stopAzureAudio();
     if(document.fullscreenElement && document.exitFullscreen){ document.exitFullscreen().catch(()=>{}); }
     $("reader").classList.remove("show");
   }
@@ -382,16 +410,65 @@
     return good || ja[0];
   }
 
-  function speak(){
+  // ---- Azure Speech（APIキーがあれば高品質な声で読む）----
+  const AZURE_VOICE_LABEL = { "ja-JP-NanamiNeural":"なな美", "ja-JP-KeitaNeural":"圭太" };
+  let azureVoice = "ja-JP-NanamiNeural";
+  let currentAudio = null;
+  function stopAzureAudio(){
+    if(currentAudio){ currentAudio.pause(); currentAudio = null; }
+  }
+  async function speakWithAzure(text, key, region, voice){
+    const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const ssml = `<speak version='1.0' xml:lang='ja-JP'><voice name='${voice}'><prosody rate='-10%'>${escaped}</prosody></voice></speak>`;
+    const res = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-16khz-64kbitrate-mono-mp3"
+      },
+      body: ssml
+    });
+    if(!res.ok) throw new Error("Azure読み上げに失敗しました（" + res.status + "）");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    currentAudio = new Audio(url);
+    await currentAudio.play();
+  }
+
+  // 端末標準の読み上げ（フォールバック）
+  function speakWithWebSpeech(text){
     if(!('speechSynthesis' in window)){ alert("この端末は読み上げに対応していません。"); return; }
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(toReadingText(chunks[idx] || ""));
+    const u = new SpeechSynthesisUtterance(text);
     u.lang = "ja-JP"; u.rate = 0.9;
     const v = pickJaVoice();
     if(v) u.voice = v;
     const label = $("voiceLabel");
-    if(label) label.textContent = "声：" + (v ? v.name : "端末の既定");
+    if(label) label.textContent = "声：端末標準（" + (v ? v.name : "既定") + "）";
     window.speechSynthesis.speak(u);
+  }
+
+  async function speak(){
+    const text = toReadingText(chunks[idx] || "");
+    if(!text) return;
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    stopAzureAudio();
+    const key = $("azureKey").value.trim();
+    const region = $("azureRegion").value.trim() || "japaneast";
+    if(key){
+      const label = $("voiceLabel");
+      if(label) label.textContent = "声：Azure（" + (AZURE_VOICE_LABEL[azureVoice]||azureVoice) + "）読み込み中…";
+      try{
+        await speakWithAzure(text, key, region, azureVoice);
+        if(label) label.textContent = "声：Azure（" + (AZURE_VOICE_LABEL[azureVoice]||azureVoice) + "）";
+        return;
+      }catch(err){
+        console.error("Azure TTS error:", err);
+        if(label) label.textContent = "Azureの読み上げに失敗（端末標準で読みます）";
+      }
+    }
+    speakWithWebSpeech(text);
   }
 
   function go(d){
@@ -523,6 +600,41 @@
   });
   document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "hidden") saveSrc(); });
   window.addEventListener("pagehide", saveSrc);
+
+  // Azureのキー・リージョン・声も、この端末のブラウザ内に保存して次回自動で復元する
+  const AZURE_KEY_STORE = "yomishien_azure_key_v1";
+  const AZURE_REGION_STORE = "yomishien_azure_region_v1";
+  const AZURE_VOICE_STORE = "yomishien_azure_voice_v1";
+  (function restoreAzureSettings(){
+    try{
+      const k = localStorage.getItem(AZURE_KEY_STORE);
+      const r = localStorage.getItem(AZURE_REGION_STORE);
+      const v = localStorage.getItem(AZURE_VOICE_STORE);
+      if(k) $("azureKey").value = k;
+      if(r) $("azureRegion").value = r;
+      if(v){
+        azureVoice = v;
+        $("voiceChips").querySelectorAll(".chip").forEach(c=>{
+          c.classList.toggle("active", c.dataset.voice === v);
+        });
+      }
+    }catch(e){}
+  })();
+  function saveAzureSettings(){
+    try{
+      localStorage.setItem(AZURE_KEY_STORE, $("azureKey").value.trim());
+      localStorage.setItem(AZURE_REGION_STORE, $("azureRegion").value.trim());
+      localStorage.setItem(AZURE_VOICE_STORE, azureVoice);
+    }catch(e){}
+  }
+  $("azureKey").addEventListener("change", saveAzureSettings);
+  $("azureRegion").addEventListener("change", saveAzureSettings);
+  $("voiceChips").addEventListener("click", e=>{
+    const b=e.target.closest(".chip"); if(!b)return;
+    $("voiceChips").querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    b.classList.add("active"); azureVoice = b.dataset.voice;
+    saveAzureSettings();
+  });
 
   $("splitChips").addEventListener("click", e=>{
     const b=e.target.closest(".chip"); if(!b)return;
