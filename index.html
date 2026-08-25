@@ -389,54 +389,74 @@
     if(n >= 0 && n < chunks.length){ idx = n; drawReader(); }
   }
 
-  // ---- 自動ふりがな（Kuroshiro / kuromoji をネットから読み込み）----
-  let kuroshiro = null;
-  function loadScript(src){
-    return new Promise((res, rej)=>{
-      const s = document.createElement("script");
-      s.src = src; s.onload = res; s.onerror = ()=>rej(new Error("読み込み失敗: "+src));
-      document.head.appendChild(s);
-    });
-  }
-  // 指定ミリ秒で返事がなければ失敗にする
-  function withTimeout(promise, ms, label){
-    return new Promise((res, rej)=>{
-      const t = setTimeout(()=>rej(new Error((label||"処理")+"が時間切れ")), ms);
-      promise.then(v=>{ clearTimeout(t); res(v); }, e=>{ clearTimeout(t); rej(e); });
-    });
-  }
-  async function initKuroshiro(onProgress){
-    if(kuroshiro) return kuroshiro;
-    const say = m => { if(onProgress) onProgress(m); };
-    say("ライブラリを読み込み中…");
-    if(!window.Kuroshiro){
-      await withTimeout(loadScript("https://cdn.jsdelivr.net/npm/kuroshiro@1.2.0/dist/kuroshiro.min.js"), 15000, "ライブラリ読み込み");
-    }
-    if(!window.KuromojiAnalyzer){
-      await withTimeout(loadScript("https://cdn.jsdelivr.net/npm/kuroshiro-analyzer-kuromoji@1.1.0/dist/kuroshiro-analyzer-kuromoji.min.js"), 15000, "ライブラリ読み込み");
-    }
-    // ブラウザ版は .default にクラスが入っていることが多いので両対応にする
-    const K = window.Kuroshiro && (window.Kuroshiro.default || window.Kuroshiro);
-    const A = window.KuromojiAnalyzer && (window.KuromojiAnalyzer.default || window.KuromojiAnalyzer);
-    if(typeof K !== "function") throw new Error("Kuroshiro本体が読み込めませんでした");
-    if(typeof A !== "function") throw new Error("kuromoji解析器が読み込めませんでした");
-    // 辞書の置き場所を複数試し、固まったら次へ（各20秒でタイムアウト）
-    const DICTS = [
-      "https://unpkg.com/kuromoji@0.1.2/dict/",
-      "https://cdn.jsdelivr.net/npm/@sglkc/kuromoji@1.0.1/dict/",
-      "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/"
-    ];
-    let lastErr = null;
-    for(let i=0;i<DICTS.length;i++){
+  // ---- 自動ふりがな（Kuroshiro / kuromoji をWeb Worker内で読み込む）----
+  // 辞書の読み込み・解析はCPUを使う重い処理で、メインスレッドで行うと
+  // 画面が完全に固まって操作できなくなるため、別スレッド（Worker）で実行する
+  const FURIGANA_DICTS = [
+    "https://unpkg.com/kuromoji@0.1.2/dict/",
+    "https://cdn.jsdelivr.net/npm/@sglkc/kuromoji@1.0.1/dict/",
+    "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/"
+  ];
+  const FURIGANA_WORKER_SRC = `
+    self.onmessage = async function(e){
+      const { text, dicts } = e.data;
       try{
-        say("辞書を読み込み中…（"+(i+1)+"/"+DICTS.length+" を試行）");
-        const k = new K();
-        await withTimeout(k.init(new A({ dictPath: DICTS[i] })), 20000, "辞書読み込み");
-        kuroshiro = k;
-        return k;
-      }catch(e){ lastErr = e; }
+        importScripts("https://cdn.jsdelivr.net/npm/kuroshiro@1.2.0/dist/kuroshiro.min.js");
+        importScripts("https://cdn.jsdelivr.net/npm/kuroshiro-analyzer-kuromoji@1.1.0/dist/kuroshiro-analyzer-kuromoji.min.js");
+        const K = self.Kuroshiro && (self.Kuroshiro.default || self.Kuroshiro);
+        const A = self.KuromojiAnalyzer && (self.KuromojiAnalyzer.default || self.KuromojiAnalyzer);
+        if(typeof K !== "function") throw new Error("Kuroshiro本体が読み込めませんでした");
+        if(typeof A !== "function") throw new Error("kuromoji解析器が読み込めませんでした");
+        let kuro = null, lastErr = null;
+        for(let i=0;i<dicts.length;i++){
+          try{
+            self.postMessage({type:"progress", message:"辞書を読み込み中…（"+(i+1)+"/"+dicts.length+" を試行）"});
+            const k = new K();
+            await k.init(new A({ dictPath: dicts[i] }));
+            kuro = k; break;
+          }catch(err){ lastErr = err; }
+        }
+        if(!kuro) throw new Error("辞書を読み込めません（" + (lastErr && lastErr.message ? lastErr.message : lastErr) + "）");
+        self.postMessage({type:"progress", message:"ふりがなを付けています…"});
+        const html = await kuro.convert(text, { mode:"furigana", to:"hiragana" });
+        self.postMessage({type:"done", html});
+      }catch(err){
+        self.postMessage({type:"error", message: (err && err.message) ? err.message : String(err)});
+      }
+    };
+  `;
+  let furiganaWorker = null;
+  function getFuriganaWorker(){
+    if(!furiganaWorker){
+      const blob = new Blob([FURIGANA_WORKER_SRC], { type: "application/javascript" });
+      furiganaWorker = new Worker(URL.createObjectURL(blob));
     }
-    throw new Error("辞書を読み込めません（" + (lastErr && lastErr.message ? lastErr.message : lastErr) + "）");
+    return furiganaWorker;
+  }
+  // Workerに変換を依頼し、結果（ふりがな付きHTML）を待つ。画面は固まらない
+  function convertFuriganaInWorker(text, onProgress){
+    return new Promise((resolve, reject)=>{
+      let worker;
+      try{ worker = getFuriganaWorker(); }
+      catch(e){ reject(new Error("バックグラウンド処理を開始できませんでした")); return; }
+      const timeoutId = setTimeout(()=>{
+        cleanup();
+        furiganaWorker = null; // 次回は作り直す
+        reject(new Error("処理が時間切れになりました"));
+      }, 90000);
+      function onMsg(e){
+        const d = e.data;
+        if(d.type === "progress"){ if(onProgress) onProgress(d.message); }
+        else if(d.type === "done"){ cleanup(); resolve(d.html); }
+        else if(d.type === "error"){ cleanup(); reject(new Error(d.message)); }
+      }
+      function cleanup(){
+        clearTimeout(timeoutId);
+        worker.removeEventListener("message", onMsg);
+      }
+      worker.addEventListener("message", onMsg);
+      worker.postMessage({ text, dicts: FURIGANA_DICTS });
+    });
   }
   // Kuroshiroの <ruby> 出力を 漢字《よみ》 表記に変換
   function rubyHtmlToKakko(html){
@@ -460,10 +480,8 @@
     const btn = $("autoRuby");
     btn.disabled = true; status.textContent = "準備中…";
     try{
-      const k = await initKuroshiro(m => { status.textContent = m; });
-      status.textContent = "ふりがなを付けています…";
       const plain = stripRuby(ta.value); // いったん素の文章に戻してから付け直す
-      const html = await k.convert(plain, { mode:"furigana", to:"hiragana" });
+      const html = await convertFuriganaInWorker(plain, m => { status.textContent = m; });
       ta.value = rubyHtmlToKakko(html);
       status.textContent = "完了しました。読みがちがう所は手で直せます。";
     }catch(err){
