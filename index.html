@@ -217,6 +217,19 @@
   let idx = 0;
   let lineSize = null; // 一行モードで全文に使う共通サイズ
 
+  // ---- 原稿の自動保存（画面を離れて戻ってきても消えないように）----
+  const SRC_KEY = "yomishien_src_v1";
+  function saveSrc(){
+    try{ localStorage.setItem(SRC_KEY, $("src").value); }catch(e){}
+  }
+  function restoreSrc(){
+    try{
+      const saved = localStorage.getItem(SRC_KEY);
+      if(saved) $("src").value = saved;
+    }catch(e){}
+  }
+  restoreSrc();
+
   // ふりがな記法（漢字《かんじ》）→ <ruby>
   //  ｜で底を明示／漢字の連続／その他、の順で処理して、助詞などに余計にかからないようにする
   const KANJI = "\\u4E00-\\u9FFF\\u3005\\u3006\\u30F6";
@@ -293,18 +306,17 @@
   }
 
   // 文字を画面の高さいっぱいまで大きくする
+  // #readerTextはwidth:100%で幅が固定されており、折り返し表示（white-space:normal）では
+  // 文字サイズを変えても幅は常に同じ（=常に折り返し内に収まる）ため、高さだけで判定する
   function fitText(){
     const stage = $("readerStage");
     const el = $("readerText");
     const maxH = stage.clientHeight * 0.96;
-    const csF = getComputedStyle(stage);
-    const padXF = (parseFloat(csF.paddingLeft)||0) + (parseFloat(csF.paddingRight)||0);
-    const maxW = stage.clientWidth - padXF - 6; // 実際に描ける幅いっぱい
     let lo = 24, hi = 600, best = 24;
     while(lo <= hi){
       const mid = (lo + hi) >> 1;
       el.style.fontSize = mid + "px";
-      if(el.scrollHeight <= maxH && el.scrollWidth <= maxW){ best = mid; lo = mid+1; }
+      if(el.scrollHeight <= maxH){ best = mid; lo = mid+1; }
       else { hi = mid-1; }
     }
     el.style.fontSize = best + "px";
@@ -319,7 +331,9 @@
     const padXL = (parseFloat(csL.paddingLeft)||0) + (parseFloat(csL.paddingRight)||0);
     const maxW = stage.clientWidth - padXL - 6; // 実際に描ける幅いっぱい
     const prevWS = el.style.whiteSpace;
+    const prevWidth = el.style.width;
     el.style.whiteSpace = "nowrap";
+    el.style.width = "max-content"; // width:100%固定を外し、実際の文字幅を測れるようにする
     let lo = 24, hi = 600, best = 24;
     while(lo <= hi){
       const mid = (lo + hi) >> 1;
@@ -334,6 +348,7 @@
     // 表示中の文に戻す
     el.innerHTML = toRuby(chunks[idx] || "");
     el.style.whiteSpace = prevWS;
+    el.style.width = prevWidth;
     return best;
   }
 
@@ -447,6 +462,15 @@
   $("say").addEventListener("click", speak);
 
   $("size").addEventListener("input", ()=> $("sizeVal").textContent = $("size").value+"px");
+
+  // 原稿は入力のたびに保存し、画面が見えなくなる瞬間にも念のため保存する
+  let srcSaveTimer = null;
+  $("src").addEventListener("input", ()=>{
+    clearTimeout(srcSaveTimer);
+    srcSaveTimer = setTimeout(saveSrc, 300);
+  });
+  document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "hidden") saveSrc(); });
+  window.addEventListener("pagehide", saveSrc);
 
   $("splitChips").addEventListener("click", e=>{
     const b=e.target.closest(".chip"); if(!b)return;
