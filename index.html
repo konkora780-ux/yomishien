@@ -186,8 +186,13 @@
     <div class="row">
       <label>声の種類</label>
       <div class="chips" id="voiceChips">
-        <button class="chip active" data-voice="ja-JP-NanamiNeural">なな美（女性・高品質）</button>
-        <button class="chip" data-voice="ja-JP-KeitaNeural">圭太（男性・高品質）</button>
+        <button class="chip active" data-voice="ja-JP-NanamiNeural">なな美（女性）</button>
+        <button class="chip" data-voice="ja-JP-AoiNeural">あおい（女性）</button>
+        <button class="chip" data-voice="ja-JP-MayuNeural">まゆ（女性）</button>
+        <button class="chip" data-voice="ja-JP-ShioriNeural">しおり（女性）</button>
+        <button class="chip" data-voice="ja-JP-KeitaNeural">圭太（男性）</button>
+        <button class="chip" data-voice="ja-JP-DaichiNeural">だいち（男性）</button>
+        <button class="chip" data-voice="ja-JP-NaokiNeural">なおき（男性）</button>
       </div>
     </div>
     <div class="row">
@@ -411,7 +416,10 @@
   }
 
   // ---- Azure Speech（APIキーがあれば高品質な声で読む）----
-  const AZURE_VOICE_LABEL = { "ja-JP-NanamiNeural":"なな美", "ja-JP-KeitaNeural":"圭太" };
+  const AZURE_VOICE_LABEL = {
+    "ja-JP-NanamiNeural":"なな美", "ja-JP-AoiNeural":"あおい", "ja-JP-MayuNeural":"まゆ", "ja-JP-ShioriNeural":"しおり",
+    "ja-JP-KeitaNeural":"圭太", "ja-JP-DaichiNeural":"だいち", "ja-JP-NaokiNeural":"なおき"
+  };
   let azureVoice = "ja-JP-NanamiNeural";
   let currentAudio = null;
   function stopAzureAudio(){
