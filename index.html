@@ -22,7 +22,8 @@
     --previewfont:var(--fontstack);
     --previewweight:400;
   }
-  *{box-sizing:border-box;}
+  /* ダブルタップでの画面拡大を防ぐ（スクロールやピンチ操作はそのまま使える） */
+  *{box-sizing:border-box;touch-action:manipulation;}
   html,body{margin:0;height:100%;}
   body{
     background:var(--page-bg);color:var(--ink);
